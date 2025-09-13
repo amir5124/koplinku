@@ -6,6 +6,10 @@ const crypto = require('crypto');
 const app = express();
 const port = 3000;
 
+// --- Impor dan gunakan package cors ---
+const cors = require('cors');
+app.use(cors());
+
 // Konfigurasi koneksi database
 const db = mysql.createPool({
     host: 'linku.co.id',
@@ -37,16 +41,8 @@ db.getConnection((err, connection) => {
     return;
 });
 
-
 // Middleware untuk mem-parsing body request JSON
 app.use(bodyParser.json());
-
-// Middleware untuk mengizinkan CORS (penting untuk frontend)
-app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
-    next();
-});
 
 const clientId = "5f5aa496-7e16-4ca1-9967-33c768dac6c7";
 const clientSecret = "TM1rVhfaFm5YJxKruHo0nWMWC";
