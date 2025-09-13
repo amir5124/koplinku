@@ -279,7 +279,7 @@ app.post('/create-qris', async (req, res) => {
             url_callback,
             amount: jumlah,
             customer_id: anggota_id,
-            customer_name: body.customer_name,
+            customer_name: body.customer_email,
             customer_email: body.customer_email
         };
 
@@ -294,19 +294,35 @@ app.post('/create-qris', async (req, res) => {
         const result = response.data;
         console.log('API LinkQu.id berhasil dipanggil. Respons:', result);
 
-        // --- Langkah 3: Simpan detail pembayaran ke tabel `pembayaran_online` ---
+        // --- Langkah 3: Ambil gambar QRIS dari URL dan ubah menjadi Buffer ---
+        let qrisImageBuffer = null;
+        if (result.imageqris) {
+            try {
+                // Mengambil gambar QRIS sebagai data biner
+                const imageResponse = await axios.get(result.imageqris, {
+                    responseType: 'arraybuffer'
+                });
+                qrisImageBuffer = Buffer.from(imageResponse.data);
+                console.log('✅ Gambar QRIS berhasil diunduh.');
+            } catch (imageErr) {
+                console.error(`❌ Gagal mengunduh gambar QRIS: ${imageErr.message}`);
+            }
+        }
+
+        // --- Langkah 4: Simpan detail pembayaran ke tabel `pembayaran_online` ---
         console.log('Menyimpan detail pembayaran online...');
         await db.query(
             `INSERT INTO pembayaran_online (
                 transaksi_id, partner_reff, jumlah, jenis_pembayaran, qris_url,
-                status_pembayaran, expired_at, customer_id, raw_response
-            ) VALUES (?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), ?, ?)`,
+                qris_image, status_pembayaran, expired_at, customer_id, raw_response
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), ?, ?)`,
             [
                 transaksiId,
                 partner_reff,
                 result.amount,
                 'QRIS',
                 result.imageqris,
+                qrisImageBuffer, // Menyimpan data biner ke kolom BLOB
                 'PENDING',
                 expired,
                 anggota_id,
@@ -324,7 +340,6 @@ app.post('/create-qris', async (req, res) => {
         });
     }
 });
-
 // Anda perlu menambahkan fungsi-fungsi ini di file yang sama
 // tempat Anda mendefinisikan `db` dan rute Express.
 
