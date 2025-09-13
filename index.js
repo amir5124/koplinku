@@ -224,105 +224,105 @@ app.post('/create-va', async (req, res) => {
     }
 });
 
----
 
-    app.post('/create-qris', async (req, res) => {
-        console.log('✅ Menerima permintaan untuk membuat QRIS...');
-        try {
-            const body = req.body;
-            console.log('Data yang diterima:', body);
 
-            // Validasi data yang masuk dari klien
-            const { jumlah, keterangan, anggota_id, jenis_simpanan_id } = body;
-            if (!anggota_id || !jumlah || !jenis_simpanan_id) {
-                console.error('Data tidak lengkap: anggota_id, jumlah, atau jenis_simpanan_id tidak ditemukan.');
-                return res.status(400).json({
-                    error: "Data tidak lengkap",
-                    detail: "Mohon lengkapi semua data yang diperlukan (anggota_id, jumlah, jenis_simpanan_id)."
-                });
-            }
+app.post('/create-qris', async (req, res) => {
+    console.log('✅ Menerima permintaan untuk membuat QRIS...');
+    try {
+        const body = req.body;
+        console.log('Data yang diterima:', body);
 
-            // --- Langkah 1: Simpan setoran di tabel `transaksi` ---
-            console.log(`Menyimpan transaksi di database untuk anggota ID ${anggota_id}...`);
-
-            const [transaksiResult] = await db.query(
-                `INSERT INTO transaksi (anggota_id, jenis_simpanan_id, tanggal_transaksi, jumlah, tipe_transaksi, keterangan) VALUES (?, ?, NOW(), ?, ?, ?)`,
-                [anggota_id, jenis_simpanan_id, jumlah, 'SETORAN ONLINE', keterangan]
-            );
-            const transaksiId = transaksiResult.insertId;
-            console.log(`Transaksi berhasil disimpan dengan ID: ${transaksiId}`);
-
-            // --- Langkah 2: Panggil API LinkQu.id ---
-            const partner_reff = generatePartnerReff();
-            const expired = getExpiredTimestamp();
-            const url_callback = "https://kop.siappgo.id/callback";
-
-            const signature = generateSignatureQRIS({
-                amount: jumlah,
-                expired,
-                partner_reff,
-                customer_id: anggota_id,
-                customer_name: body.customer_name,
-                customer_email: body.customer_email,
-                clientId,
-                serverKey
+        // Validasi data yang masuk dari klien
+        const { jumlah, keterangan, anggota_id, jenis_simpanan_id } = body;
+        if (!anggota_id || !jumlah || !jenis_simpanan_id) {
+            console.error('Data tidak lengkap: anggota_id, jumlah, atau jenis_simpanan_id tidak ditemukan.');
+            return res.status(400).json({
+                error: "Data tidak lengkap",
+                detail: "Mohon lengkapi semua data yang diperlukan (anggota_id, jumlah, jenis_simpanan_id)."
             });
+        }
 
-            const payload = {
-                ...body,
-                partner_reff,
-                username,
-                pin,
-                expired,
-                signature,
-                url_callback,
-                amount: jumlah,
-                customer_id: anggota_id,
-                customer_name: body.customer_name,
-                customer_email: body.customer_email
-            };
+        // --- Langkah 1: Simpan setoran di tabel `transaksi` ---
+        console.log(`Menyimpan transaksi di database untuk anggota ID ${anggota_id}...`);
 
-            const headers = {
-                'client-id': clientId,
-                'client-secret': clientSecret
-            };
+        const [transaksiResult] = await db.query(
+            `INSERT INTO transaksi (anggota_id, jenis_simpanan_id, tanggal_transaksi, jumlah, tipe_transaksi, keterangan) VALUES (?, ?, NOW(), ?, ?, ?)`,
+            [anggota_id, jenis_simpanan_id, jumlah, 'SETORAN ONLINE', keterangan]
+        );
+        const transaksiId = transaksiResult.insertId;
+        console.log(`Transaksi berhasil disimpan dengan ID: ${transaksiId}`);
 
-            const url = 'https://api.linkqu.id/linkqu-partner/transaction/create/qris';
-            console.log(`Memanggil API LinkQu.id untuk QRIS...`);
-            const response = await axios.post(url, payload, { headers });
-            const result = response.data;
-            console.log('API LinkQu.id berhasil dipanggil. Respons:', result);
+        // --- Langkah 2: Panggil API LinkQu.id ---
+        const partner_reff = generatePartnerReff();
+        const expired = getExpiredTimestamp();
+        const url_callback = "https://kop.siappgo.id/callback";
 
-            // --- Langkah 3: Simpan detail pembayaran ke tabel `pembayaran_online` ---
-            console.log('Menyimpan detail pembayaran online...');
-            await db.query(
-                `INSERT INTO pembayaran_online (
+        const signature = generateSignatureQRIS({
+            amount: jumlah,
+            expired,
+            partner_reff,
+            customer_id: anggota_id,
+            customer_name: body.customer_name,
+            customer_email: body.customer_email,
+            clientId,
+            serverKey
+        });
+
+        const payload = {
+            ...body,
+            partner_reff,
+            username,
+            pin,
+            expired,
+            signature,
+            url_callback,
+            amount: jumlah,
+            customer_id: anggota_id,
+            customer_name: body.customer_name,
+            customer_email: body.customer_email
+        };
+
+        const headers = {
+            'client-id': clientId,
+            'client-secret': clientSecret
+        };
+
+        const url = 'https://api.linkqu.id/linkqu-partner/transaction/create/qris';
+        console.log(`Memanggil API LinkQu.id untuk QRIS...`);
+        const response = await axios.post(url, payload, { headers });
+        const result = response.data;
+        console.log('API LinkQu.id berhasil dipanggil. Respons:', result);
+
+        // --- Langkah 3: Simpan detail pembayaran ke tabel `pembayaran_online` ---
+        console.log('Menyimpan detail pembayaran online...');
+        await db.query(
+            `INSERT INTO pembayaran_online (
                 transaksi_id, partner_reff, jumlah, jenis_pembayaran, qris_url,
                 status_pembayaran, expired_at, customer_id, raw_response
             ) VALUES (?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), ?, ?)`,
-                [
-                    transaksiId,
-                    partner_reff,
-                    result.amount,
-                    'QRIS',
-                    result.imageqris,
-                    'PENDING',
-                    expired,
-                    anggota_id,
-                    JSON.stringify(result)
-                ]
-            );
-            console.log('Detail pembayaran online berhasil disimpan.');
+            [
+                transaksiId,
+                partner_reff,
+                result.amount,
+                'QRIS',
+                result.imageqris,
+                'PENDING',
+                expired,
+                anggota_id,
+                JSON.stringify(result)
+            ]
+        );
+        console.log('Detail pembayaran online berhasil disimpan.');
 
-            res.json(result);
-        } catch (err) {
-            console.error(`❌ Gagal membuat QRIS: ${err.message}`);
-            res.status(500).json({
-                error: "Gagal membuat QRIS",
-                detail: err.response?.data || err.message
-            });
-        }
-    });
+        res.json(result);
+    } catch (err) {
+        console.error(`❌ Gagal membuat QRIS: ${err.message}`);
+        res.status(500).json({
+            error: "Gagal membuat QRIS",
+            detail: err.response?.data || err.message
+        });
+    }
+});
 
 // Endpoint untuk pendaftaran anggota (metode POST)
 app.post('/api/register-member', (req, res) => {
