@@ -325,6 +325,107 @@ app.post('/create-qris', async (req, res) => {
     }
 });
 
+// Anda perlu menambahkan fungsi-fungsi ini di file yang sama
+// tempat Anda mendefinisikan `db` dan rute Express.
+
+// Fungsi untuk mendapatkan status pembayaran saat ini
+const getCurrentStatus = async (partnerReff) => {
+    const [rows] = await db.query(
+        `SELECT status_pembayaran FROM pembayaran_online WHERE partner_reff = ? LIMIT 1`,
+        [partnerReff]
+    );
+    return rows[0] ? rows[0].status_pembayaran : null;
+};
+
+// Fungsi untuk memperbarui status pembayaran menjadi SUKSES
+const updatePaymentStatus = async (partnerReff, paymentType) => {
+    await db.query(
+        `UPDATE pembayaran_online SET status_pembayaran = 'SUKSES' WHERE partner_reff = ?`,
+        [partnerReff]
+    );
+    console.log(`✅ Status pembayaran untuk ${paymentType} dengan Partner Reff ${partnerReff} berhasil diperbarui menjadi SUKSES.`);
+};
+
+// Fungsi utama untuk menambah saldo anggota
+const addBalance = async (partnerReff) => {
+    // 1. Ambil jumlah dan anggota_id dari tabel transaksi dan pembayaran_online
+    const [rows] = await db.query(
+        `SELECT
+            t.jumlah,
+            t.anggota_id
+        FROM pembayaran_online AS po
+        JOIN transaksi AS t ON po.transaksi_id = t.id
+        WHERE po.partner_reff = ?
+        LIMIT 1`,
+        [partnerReff]
+    );
+
+    if (rows.length === 0) {
+        console.error(`❌ Data transaksi tidak ditemukan untuk Partner Reff: ${partnerReff}`);
+        return;
+    }
+
+    const { jumlah, anggota_id } = rows[0];
+
+    // 2. Perbarui saldo di tabel anggota
+    await db.query(
+        `UPDATE anggota
+        SET saldo = saldo + ?
+        WHERE id = ?`,
+        [jumlah, anggota_id]
+    );
+    console.log(`✅ Saldo anggota ID ${anggota_id} berhasil ditambahkan sejumlah ${jumlah}.`);
+};
+
+// Endpoint callback yang sudah diperbarui
+app.post("/callback", async (req, res) => {
+    console.log(`✅ Callback diterima: ${JSON.stringify(req.body)}`);
+
+    try {
+        const { partner_reff, va_code } = req.body;
+
+        // Ambil status pembayaran saat ini untuk menghindari duplikasi
+        const currentStatus = await getCurrentStatus(partner_reff);
+
+        if (currentStatus === 'SUKSES') {
+            console.log(`ℹ️ Transaksi ${partner_reff} sudah diproses sebelumnya. Tidak diproses ulang.`);
+            return res.status(200).json({
+                message: "Transaksi sudah SUKSES sebelumnya. Tidak diproses ulang."
+            });
+        }
+
+        // Periksa apakah pembayaran berhasil (misalnya, dari body callback)
+        // LinkQu.id mengirimkan status SUKSES jika pembayaran berhasil
+        const paymentStatusFromCallback = req.body.status;
+        if (paymentStatusFromCallback === 'SUKSES') {
+            // Lakukan penambahan saldo dan perbarui status dalam satu transaksi database
+            await db.query('START TRANSACTION');
+            try {
+                await addBalance(partner_reff);
+                await updatePaymentStatus(partner_reff, va_code || 'QRIS');
+                await db.query('COMMIT');
+                console.log(`✅ Transaksi ${partner_reff} selesai diproses.`);
+                res.status(200).json({ message: "Callback diterima dan saldo ditambahkan" });
+            } catch (transactionErr) {
+                await db.query('ROLLBACK');
+                console.error(`❌ Rollback transaksi karena gagal memproses callback: ${transactionErr.message}`);
+                throw transactionErr;
+            }
+        } else {
+            console.log(`ℹ️ Callback untuk transaksi ${partner_reff} diterima, tetapi statusnya bukan SUKSES. Tidak ada perubahan saldo.`);
+            res.status(200).json({ message: "Callback diterima, tetapi pembayaran belum SUKSES" });
+        }
+
+    } catch (err) {
+        console.error(`❌ Gagal memproses callback: ${err.message}`);
+        res.status(500).json({
+            error: "Gagal memproses callback",
+            detail: err.message
+        });
+    }
+});
+
+
 // Endpoint untuk pendaftaran anggota (metode POST)
 app.post('/api/register-member', (req, res) => {
     // Ambil data dari body request
