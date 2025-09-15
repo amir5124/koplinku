@@ -427,30 +427,41 @@ app.post("/callback", async (req, res) => {
 
 
 // Endpoint untuk pendaftaran anggota (metode POST)
+// Endpoint untuk mendaftarkan anggota baru
+// Endpoint untuk mendaftarkan anggota baru
 app.post('/api/register-member', (req, res) => {
-    // Ambil data dari body request
+    // Logging: Catat permintaan masuk
+    console.log('API /api/register-member dipanggil.');
+    console.log('Data yang diterima:', req.body);
+
     const { nama, alamat, no_telepon } = req.body;
 
-    // Validasi sederhana: pastikan nama tidak kosong
     if (!nama) {
+        // Logging: Catat respons error
+        console.error('Error: Nama tidak diisi. Mengirim status 400.');
         return res.status(400).json({ success: false, message: 'Nama harus diisi.' });
     }
 
-    const sql = `INSERT INTO anggota (nama, alamat, no_telepon, tanggal_bergabung) VALUES (?, ?, ?, CURDATE())`;
+    const sql = `INSERT INTO anggota (nama, alamat, no_telepon, tanggal_bergabung, status) VALUES (?, ?, ?, CURDATE(), 'Aktif')`;
 
-    // Jalankan query SQL
     db.query(sql, [nama, alamat, no_telepon], (err, result) => {
         if (err) {
+            // Logging: Catat error dari database
             console.error('Error saat menyimpan data:', err);
             return res.status(500).json({ success: false, message: 'Gagal mendaftar anggota.', error: err.message });
         }
 
-        console.log('Anggota baru berhasil terdaftar:', result.insertId);
+        // Logging: Catat respons sukses
+        console.log('Anggota baru berhasil terdaftar. ID:', result.insertId);
         res.status(201).json({ success: true, message: 'Anggota berhasil didaftarkan!', memberId: result.insertId });
     });
 });
 
+// Endpoint untuk memeriksa keberadaan anggota
 app.get('/api/check-member', (req, res) => {
+    console.log('API /api/check-member dipanggil.');
+    console.log('Query yang diterima:', req.query);
+
     const nama = req.query.nama;
 
     if (!nama) {
@@ -458,6 +469,7 @@ app.get('/api/check-member', (req, res) => {
     }
 
     const sql = `SELECT COUNT(*) AS count FROM anggota WHERE nama = ? AND status = 'Aktif'`;
+    console.log('Menjalankan query:', sql);
 
     db.query(sql, [nama], (err, result) => {
         if (err) {
@@ -465,7 +477,13 @@ app.get('/api/check-member', (req, res) => {
             return res.status(500).json({ success: false, message: 'Gagal memeriksa anggota.' });
         }
 
+        // --- BARIS PENTING INI ---
+        console.log('Hasil mentah dari query database:', result);
+        // --- AKHIR BARIS PENTING ---
+
         const memberExists = result[0].count > 0;
+        console.log('Hasil pengecekan:', { nama, exists: memberExists });
+
         if (memberExists) {
             return res.status(200).json({ exists: true, message: 'Anda sudah terdaftar sebagai anggota aktif.' });
         } else {
@@ -473,30 +491,44 @@ app.get('/api/check-member', (req, res) => {
         }
     });
 });
-
+// Endpoint untuk mendapatkan detail anggota
 app.get('/api/member-details', (req, res) => {
+    // Logging: Catat permintaan masuk
+    console.log('API /api/member-details dipanggil.');
+    console.log('Query yang diterima:', req.query);
+
     const { nama } = req.query;
 
     if (!nama) {
+        // Logging: Catat respons error
+        console.error('Error: Nama anggota pada query kosong. Mengirim status 400.');
         return res.status(400).json({ success: false, message: 'Nama anggota tidak boleh kosong.' });
     }
 
     const sql = `SELECT * FROM anggota WHERE nama = ?`;
+    // Logging: Tampilkan query SQL
+    console.log('Menjalankan query:', sql);
 
     db.query(sql, [nama], (err, result) => {
         if (err) {
+            // Logging: Catat error dari database
             console.error('Error saat mengambil detail anggota:', err);
             return res.status(500).json({ success: false, message: 'Gagal mengambil data anggota.', error: err.message });
         }
 
         if (result.length === 0) {
+            // Logging: Catat respons 'tidak ditemukan'
+            console.warn('Anggota tidak ditemukan:', nama);
             return res.status(404).json({ success: false, message: 'Anggota tidak ditemukan.' });
         }
 
-        // Kirim data anggota yang ditemukan
+        // Logging: Catat respons sukses
+        console.log('Detail anggota ditemukan. Mengirim data:', result[0]);
         res.status(200).json({ success: true, data: result[0] });
     });
 });
+
+
 
 
 // Jalankan server
