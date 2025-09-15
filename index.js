@@ -429,36 +429,65 @@ app.post("/callback", async (req, res) => {
 // Endpoint untuk pendaftaran anggota (metode POST)
 // Endpoint untuk mendaftarkan anggota baru
 // Endpoint untuk mendaftarkan anggota baru
-app.post('/api/register-member', (req, res) => {
-    // Logging: Catat permintaan masuk
+app.get('/api/member-details', async (req, res) => {
+    console.log('API /api/member-details dipanggil.');
+    console.log('Query yang diterima:', req.query);
+
+    const { nama } = req.query;
+
+    if (!nama) {
+        console.error('Error: Nama anggota pada query kosong. Mengirim status 400.');
+        return res.status(400).json({ success: false, message: 'Nama anggota tidak boleh kosong.' });
+    }
+
+    try {
+        const sql = `SELECT * FROM anggota WHERE nama = ?`;
+        console.log('Menjalankan query:', sql);
+
+        const [rows] = await db.query(sql, [nama]);
+
+        if (rows.length === 0) {
+            console.warn('Anggota tidak ditemukan:', nama);
+            return res.status(404).json({ success: false, message: 'Anggota tidak ditemukan.' });
+        }
+
+        console.log('Detail anggota ditemukan. Mengirim data:', rows[0]);
+        res.status(200).json({ success: true, data: rows[0] });
+
+    } catch (err) {
+        console.error('Error saat mengambil detail anggota:', err);
+        return res.status(500).json({ success: false, message: 'Gagal mengambil data anggota.', error: err.message });
+    }
+});
+
+// Endpoint untuk mendaftarkan anggota baru (menggunakan async/await)
+app.post('/api/register-member', async (req, res) => {
     console.log('API /api/register-member dipanggil.');
     console.log('Data yang diterima:', req.body);
 
     const { nama, alamat, no_telepon } = req.body;
 
     if (!nama) {
-        // Logging: Catat respons error
         console.error('Error: Nama tidak diisi. Mengirim status 400.');
         return res.status(400).json({ success: false, message: 'Nama harus diisi.' });
     }
 
-    const sql = `INSERT INTO anggota (nama, alamat, no_telepon, tanggal_bergabung, status) VALUES (?, ?, ?, CURDATE(), 'Aktif')`;
+    try {
+        const sql = `INSERT INTO anggota (nama, alamat, no_telepon, tanggal_bergabung, status) VALUES (?, ?, ?, CURDATE(), 'Aktif')`;
 
-    db.query(sql, [nama, alamat, no_telepon], (err, result) => {
-        if (err) {
-            // Logging: Catat error dari database
-            console.error('Error saat menyimpan data:', err);
-            return res.status(500).json({ success: false, message: 'Gagal mendaftar anggota.', error: err.message });
-        }
+        const [result] = await db.query(sql, [nama, alamat, no_telepon]);
 
-        // Logging: Catat respons sukses
         console.log('Anggota baru berhasil terdaftar. ID:', result.insertId);
         res.status(201).json({ success: true, message: 'Anggota berhasil didaftarkan!', memberId: result.insertId });
-    });
-});
 
+    } catch (err) {
+        console.error('Error saat menyimpan data:', err);
+        return res.status(500).json({ success: false, message: 'Gagal mendaftar anggota.', error: err.message });
+    }
+});
 // Endpoint untuk memeriksa keberadaan anggota
-app.get('/api/check-member', (req, res) => {
+// Endpoint untuk memeriksa keberadaan anggota (menggunakan async/await)
+app.get('/api/check-member', async (req, res) => {
     console.log('API /api/check-member dipanggil.');
     console.log('Query yang diterima:', req.query);
 
@@ -468,20 +497,18 @@ app.get('/api/check-member', (req, res) => {
         return res.status(400).json({ success: false, message: 'Nama tidak boleh kosong.' });
     }
 
-    const sql = `SELECT COUNT(*) AS count FROM anggota WHERE nama = ? AND status = 'Aktif'`;
-    console.log('Menjalankan query:', sql);
+    try {
+        const sql = `SELECT COUNT(*) AS count FROM anggota WHERE nama = ? AND status = 'Aktif'`;
+        console.log('Menjalankan query:', sql);
 
-    db.query(sql, [nama], (err, result) => {
-        if (err) {
-            console.error('Error saat memeriksa anggota:', err);
-            return res.status(500).json({ success: false, message: 'Gagal memeriksa anggota.' });
-        }
+        // Menggunakan sintaks async/await yang lebih andal
+        const [rows] = await db.query(sql, [nama]);
 
         // --- BARIS PENTING INI ---
-        console.log('Hasil mentah dari query database:', result);
+        console.log('Hasil mentah dari query database:', rows);
         // --- AKHIR BARIS PENTING ---
 
-        const memberExists = result[0].count > 0;
+        const memberExists = rows[0].count > 0;
         console.log('Hasil pengecekan:', { nama, exists: memberExists });
 
         if (memberExists) {
@@ -489,7 +516,12 @@ app.get('/api/check-member', (req, res) => {
         } else {
             return res.status(200).json({ exists: false, message: 'Nama tersedia untuk pendaftaran.' });
         }
-    });
+
+    } catch (err) {
+        // Ini akan menangkap error koneksi, query, atau timeout
+        console.error('❌ Error fatal saat memeriksa anggota:', err);
+        return res.status(500).json({ success: false, message: 'Gagal memeriksa anggota.', detail: err.message });
+    }
 });
 // Endpoint untuk mendapatkan detail anggota
 app.get('/api/member-details', (req, res) => {
