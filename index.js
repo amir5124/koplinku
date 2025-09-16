@@ -306,6 +306,55 @@ app.get('/cek-status-pembayaran-by-customer/:customer_id', async (req, res) => {
     }
 });
 
+app.get('/cek-history-pembayaran/:anggota_id', async (req, res) => {
+    const anggotaId = req.params.anggota_id;
+    logToFile(`✅ Menerima permintaan riwayat pembayaran untuk anggota_id: ${anggotaId}`);
+
+    const connection = await pool.getConnection();
+
+    try {
+        // Query database untuk mengambil riwayat pembayaran dengan JOIN
+        const query = `
+            SELECT
+                po.id_pembayaran,
+                po.partner_reff,
+                po.jumlah,
+                po.jenis_pembayaran,
+                po.va_number,
+                po.qris_url,
+                po.status_pembayaran,
+                po.expired_at,
+                po.created_at,
+                t.keterangan,
+                t.tipe_transaksi
+            FROM
+                pembayaran_online AS po
+            JOIN
+                transaksi AS t ON po.transaksi_id = t.id
+            WHERE
+                po.customer_id = ?
+            ORDER BY
+                po.created_at DESC;
+        `;
+
+        const [rows] = await connection.query(query, [anggotaId]);
+
+        if (rows.length === 0) {
+            logToFile(`❌ Tidak ada riwayat transaksi ditemukan untuk anggota_id: ${anggotaId}`);
+            return res.status(404).json({ error: "Tidak ada riwayat transaksi ditemukan." });
+        }
+
+        // Kirimkan riwayat pembayaran sebagai respons
+        res.json({ history: rows });
+
+    } catch (err) {
+        logToFile(`❌ Error saat mengambil riwayat pembayaran: ${err.message}`);
+        res.status(500).json({ error: "Terjadi kesalahan server saat mengambil riwayat pembayaran." });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
 
 app.post("/callback", async (req, res) => {
     logToFile(`✅ Callback diterima: ${JSON.stringify(req.body)}`);
