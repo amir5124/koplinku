@@ -274,6 +274,39 @@ app.get('/download-qris/:partner_reff', async (req, res) => {
     }
 });
 
+app.get('/cek-status-pembayaran-by-customer/:customer_id', async (req, res) => {
+    const customer_id = req.params.customer_id;
+    console.log(`✅ Menerima permintaan cek status untuk customer_id: ${customer_id}`);
+
+    const connection = await pool.getConnection();
+
+    try {
+        // Query database untuk mengambil transaksi terbaru berdasarkan customer_id
+        // Menggunakan ORDER BY dan LIMIT untuk mendapatkan transaksi terakhir
+        const [rows] = await connection.query(
+            `SELECT status_pembayaran FROM pembayaran_online WHERE customer_id = ? ORDER BY created_at DESC LIMIT 1`,
+            [customer_id]
+        );
+
+        if (rows.length === 0) {
+            logToFile(`❌ Tidak ada transaksi ditemukan untuk customer_id: ${customer_id}`);
+            return res.status(404).json({ error: "Tidak ada transaksi ditemukan." });
+        }
+
+        const status = rows[0].status_pembayaran;
+
+        // Kirimkan status pembayaran sebagai respons
+        res.json({ status: status });
+
+    } catch (err) {
+        logToFile(`❌ Error saat cek status pembayaran by customer: ${err.message}`);
+        res.status(500).json({ error: "Terjadi kesalahan server." });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+
 app.post("/callback", async (req, res) => {
     logToFile(`✅ Callback diterima: ${JSON.stringify(req.body)}`);
     const connection = await pool.getConnection();
