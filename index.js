@@ -130,47 +130,105 @@ app.post('/create-va', async (req, res) => {
 
 app.post('/create-qris', async (req, res) => {
     logToFile('✅ Menerima permintaan untuk membuat QRIS...');
+
+    // Mengambil koneksi dari pool
     const connection = await pool.getConnection();
 
     try {
+        // Memulai transaksi database
         await connection.beginTransaction();
+
         const body = req.body;
         const { jumlah, keterangan, anggota_id, jenis_simpanan_id } = body;
+
+        // Validasi data input
         if (!anggota_id || !jumlah || !jenis_simpanan_id) {
             await connection.rollback();
             return res.status(400).json({ error: "Data tidak lengkap" });
         }
 
+        // 1. Persiapan data untuk LinkQu
         const partner_reff = generatePartnerReff();
         const expired = getExpiredTimestamp();
         const url_callback = "https://kop.siappgo.id/callback";
-        const signature = generateSignatureQRIS({ amount: jumlah, expired, partner_reff, customer_id: anggota_id, customer_name: body.customer_name, customer_email: body.customer_email, clientId: config.clientId, serverKey: config.serverKey });
+        const signature = generateSignatureQRIS({
+            amount: jumlah,
+            expired,
+            partner_reff,
+            customer_id: anggota_id,
+            customer_name: body.customer_name || '', // Pastikan ini tidak null
+            customer_email: body.customer_email || '', // Pastikan ini tidak null
+            clientId: config.clientId,
+            serverKey: config.serverKey
+        });
 
-        const payload = { ...body, partner_reff, username: config.username, pin: config.pin, expired, signature, url_callback, amount: jumlah, customer_id: anggota_id };
-        const headers = { 'client-id': config.clientId, 'client-secret': config.clientSecret };
+        const payload = {
+            ...body,
+            partner_reff,
+            username: config.username,
+            pin: config.pin,
+            expired,
+            signature,
+            url_callback,
+            amount: jumlah,
+            customer_id: anggota_id
+        };
+        const headers = {
+            'client-id': config.clientId,
+            'client-secret': config.clientSecret
+        };
 
+        // 2. Insert ke tabel `transaksi` terlebih dahulu
         const [transaksiResult] = await connection.query(
             `INSERT INTO transaksi (anggota_id, jenis_simpanan_id, tanggal_transaksi, jumlah, tipe_transaksi, keterangan) VALUES (?, ?, NOW(), ?, ?, ?)`,
             [anggota_id, jenis_simpanan_id, jumlah, 'SETORAN ONLINE', keterangan]
         );
         const transaksiId = transaksiResult.insertId;
 
+        // 3. Panggil API LinkQu untuk membuat QRIS
         const url = 'https://api.linkqu.id/linkqu-partner/transaction/create/qris';
         const response = await axios.post(url, payload, { headers });
         const result = response.data;
 
+        // 4. Unduh gambar QRIS dari URL dan ubah menjadi Buffer
+        let qrisImageBuffer = null;
+        if (result?.imageqris) {
+            try {
+                // Menggunakan responseType: 'arraybuffer' untuk mendapatkan data biner
+                const imgResp = await axios.get(result.imageqris.trim(), { responseType: 'arraybuffer' });
+                qrisImageBuffer = imgResp.data; // Data ini adalah buffer, siap untuk disimpan
+            } catch (err) {
+                console.error("⚠️ Gagal mengunduh gambar QRIS:", err.message);
+                // Lanjutkan proses meskipun gambar gagal diunduh, tapi log errornya
+                // Anda bisa memilih untuk meng-abort transaksi jika gambar penting
+            }
+        }
+
+        // 5. Simpan data pembayaran online, termasuk gambar BLOB
         await connection.query(
-            `INSERT INTO pembayaran_online (transaksi_id, partner_reff, jumlah, jenis_pembayaran, qris_url, status_pembayaran, expired_at, customer_id, raw_response) VALUES (?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), ?, ?)`,
-            [transaksiId, partner_reff, result.amount, 'QRIS', result.imageqris, 'PENDING', expired, anggota_id, JSON.stringify(result)]
+            `INSERT INTO pembayaran_online (transaksi_id, partner_reff, jumlah, jenis_pembayaran, qris_url, status_pembayaran, expired_at, customer_id, raw_response, qris_image) VALUES (?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), ?, ?, ?)`,
+            [transaksiId, partner_reff, result.amount, 'QRIS', result.imageqris, 'PENDING', expired, anggota_id, JSON.stringify(result), qrisImageBuffer]
         );
 
+        // 6. Jika semua query berhasil, lakukan commit
         await connection.commit();
+        logToFile(`✅ QRIS berhasil dibuat untuk transaksi ID: ${transaksiId}`);
+
+        // 7. Kirimkan respons ke klien
         res.json(result);
+
     } catch (err) {
+        // Jika ada error, lakukan rollback
         await connection.rollback();
         logToFile(`❌ Gagal membuat QRIS: ${err.message}`);
-        res.status(500).json({ error: "Gagal membuat QRIS", detail: err.response?.data || err.message });
+
+        // Kirimkan respons error ke klien
+        res.status(500).json({
+            error: "Gagal membuat QRIS",
+            detail: err.response?.data || err.message
+        });
     } finally {
+        // Pastikan koneksi dikembalikan ke pool
         if (connection) connection.release();
     }
 });
