@@ -125,221 +125,133 @@ function generatePartnerReff() {
 }
 
 // ✅ Endpoint POST untuk membuat VA
-// ✅ Endpoint POST untuk membuat VA
 app.post('/create-va', async (req, res) => {
     console.log('✅ Menerima permintaan untuk membuat Virtual Account (VA)...');
-    try {
-        const body = req.body;
-        console.log('Data yang diterima:', body);
+    const connection = await pool.getConnection();
 
-        // Validasi data yang masuk dari klien
+    try {
+        await connection.beginTransaction();
+        const body = req.body;
         const { jumlah, keterangan, anggota_id, jenis_simpanan_id, bank_code } = body;
         if (!anggota_id || !jumlah || !jenis_simpanan_id) {
-            console.error('Data tidak lengkap: anggota_id, jumlah, atau jenis_simpanan_id tidak ditemukan.');
-            return res.status(400).json({
-                error: "Data tidak lengkap",
-                detail: "Mohon lengkapi semua data yang diperlukan (anggota_id, jumlah, jenis_simpanan_id)."
-            });
+            await connection.rollback();
+            return res.status(400).json({ error: "Data tidak lengkap" });
         }
 
-        // --- Langkah 1: Simpan setoran di tabel `transaksi` ---
-        console.log(`Menyimpan transaksi di database untuk anggota ID ${anggota_id}...`);
-
-        const [transaksiResult] = await db.query(
-            `INSERT INTO transaksi (anggota_id, jenis_simpanan_id, tanggal_transaksi, jumlah, tipe_transaksi, keterangan) VALUES (?, ?, NOW(), ?, ?, ?)`,
-            [anggota_id, jenis_simpanan_id, jumlah, 'SETORAN ONLINE', keterangan]
-        );
-        const transaksiId = transaksiResult.insertId;
-        console.log(`Transaksi berhasil disimpan dengan ID: ${transaksiId}`);
-
-        // --- Langkah 2: Panggil API LinkQu.id ---
         const partner_reff = generatePartnerReff();
         const expired = getExpiredTimestamp();
         const url_callback = "https://kop.siappgo.id/callback";
 
-        const signature = generateSignaturePOST({
-            amount: jumlah,
-            expired,
-            bank_code: bank_code, // Menggunakan bank_code dari body yang sudah divalidasi
-            partner_reff,
-            customer_id: anggota_id,
-            customer_name: body.customer_name,
-            customer_email: body.customer_email,
-            clientId,
-            serverKey
+        const signature = generateSignatureVA({
+            amount: jumlah, expired, bank_code, partner_reff, customer_id: anggota_id,
+            customer_name: body.customer_name, customer_email: body.customer_email,
+            clientId: config.clientId, serverKey: config.serverKey
         });
 
         const payload = {
-            ...body,
-            partner_reff,
-            username,
-            pin,
-            expired,
-            signature,
-            url_callback,
-            amount: jumlah,
-            customer_id: anggota_id,
-            customer_name: body.customer_name,
-            customer_email: body.customer_email
+            ...body, partner_reff, username: config.username, pin: config.pin,
+            expired, signature, url_callback, amount: jumlah, customer_id: anggota_id
         };
 
-        const headers = {
-            'client-id': clientId,
-            'client-secret': clientSecret
-        };
+        const headers = { 'client-id': config.clientId, 'client-secret': config.clientSecret };
 
-        const url = 'https://api.linkqu.id/linkqu-partner/transaction/create/va';
-        console.log(`Memanggil API LinkQu.id untuk VA...`);
-        const response = await axios.post(url, payload, { headers });
-        const result = response.data;
-        console.log('API LinkQu.id berhasil dipanggil. Respons:', result);
-
-        // --- Langkah 3: Simpan detail pembayaran ke tabel `pembayaran_online` ---
-        console.log('Menyimpan detail pembayaran online...');
-        await db.query(
-            `INSERT INTO pembayaran_online (
-                transaksi_id, partner_reff, jumlah, jenis_pembayaran, va_number,
-                status_pembayaran, expired_at, customer_id, raw_response
-            ) VALUES (?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), ?, ?)`,
-            [
-                transaksiId,
-                partner_reff,
-                result.amount,
-                'VA',
-                result.virtual_account,
-                'PENDING',
-                expired,
-                anggota_id,
-                JSON.stringify(result)
-            ]
-        );
-        console.log('Detail pembayaran online berhasil disimpan.');
-
-        res.json(result);
-    } catch (err) {
-        console.error('❌ Gagal membuat VA:', err.message);
-        res.status(500).json({
-            error: "Gagal membuat VA",
-            detail: err.response?.data || err.message
-        });
-    }
-});
-
-
-
-app.post('/create-qris', async (req, res) => {
-    console.log('✅ Menerima permintaan untuk membuat QRIS...');
-    try {
-        const body = req.body;
-        console.log('Data yang diterima:', body);
-
-        // Validasi data yang masuk dari klien
-        const { jumlah, keterangan, anggota_id, jenis_simpanan_id } = body;
-        if (!anggota_id || !jumlah || !jenis_simpanan_id) {
-            console.error('Data tidak lengkap: anggota_id, jumlah, atau jenis_simpanan_id tidak ditemukan.');
-            return res.status(400).json({
-                error: "Data tidak lengkap",
-                detail: "Mohon lengkapi semua data yang diperlukan (anggota_id, jumlah, jenis_simpanan_id)."
-            });
-        }
-
-        // --- Langkah 1: Simpan setoran di tabel `transaksi` ---
-        console.log(`Menyimpan transaksi di database untuk anggota ID ${anggota_id}...`);
-
-        const [transaksiResult] = await db.query(
+        // --- Langkah 1: Simpan transaksi dan pembayaran dalam satu transaksi database ---
+        const [transaksiResult] = await connection.query(
             `INSERT INTO transaksi (anggota_id, jenis_simpanan_id, tanggal_transaksi, jumlah, tipe_transaksi, keterangan) VALUES (?, ?, NOW(), ?, ?, ?)`,
             [anggota_id, jenis_simpanan_id, jumlah, 'SETORAN ONLINE', keterangan]
         );
         const transaksiId = transaksiResult.insertId;
-        console.log(`Transaksi berhasil disimpan dengan ID: ${transaksiId}`);
 
-        // --- Langkah 2: Panggil API LinkQu.id ---
+        const url = 'https://api.linkqu.id/linkqu-partner/transaction/create/va';
+        const response = await axios.post(url, payload, { headers });
+        const result = response.data;
+
+        await connection.query(
+            `INSERT INTO pembayaran_online (transaksi_id, partner_reff, jumlah, jenis_pembayaran, va_number, status_pembayaran, expired_at, customer_id, raw_response) VALUES (?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), ?, ?)`,
+            [transaksiId, partner_reff, result.amount, 'VA', result.virtual_account, 'PENDING', expired, anggota_id, JSON.stringify(result)]
+        );
+
+        await connection.commit();
+        res.json(result);
+
+    } catch (err) {
+        await connection.rollback();
+        console.error('❌ Gagal membuat VA:', err.message);
+        res.status(500).json({ error: "Gagal membuat VA", detail: err.response?.data || err.message });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+// --- ENDPOINT UNTUK MEMBUAT QRIS ---
+app.post('/create-qris', async (req, res) => {
+    console.log('✅ Menerima permintaan untuk membuat QRIS...');
+    const connection = await pool.getConnection();
+
+    try {
+        await connection.beginTransaction();
+        const body = req.body;
+        const { jumlah, keterangan, anggota_id, jenis_simpanan_id } = body;
+        if (!anggota_id || !jumlah || !jenis_simpanan_id) {
+            await connection.rollback();
+            return res.status(400).json({ error: "Data tidak lengkap" });
+        }
+
         const partner_reff = generatePartnerReff();
         const expired = getExpiredTimestamp();
         const url_callback = "https://kop.siappgo.id/callback";
 
         const signature = generateSignatureQRIS({
-            amount: jumlah,
-            expired,
-            partner_reff,
-            customer_id: anggota_id,
-            customer_name: body.customer_name,
-            customer_email: body.customer_email,
-            clientId,
-            serverKey
+            amount: jumlah, expired, partner_reff, customer_id: anggota_id,
+            customer_name: body.customer_name, customer_email: body.customer_email,
+            clientId: config.clientId, serverKey: config.serverKey
         });
 
         const payload = {
-            ...body,
-            partner_reff,
-            username,
-            pin,
-            expired,
-            signature,
-            url_callback,
-            amount: jumlah,
-            customer_id: anggota_id,
-            customer_name: body.customer_name,
-            customer_email: body.customer_email
+            ...body, partner_reff, username: config.username, pin: config.pin,
+            expired, signature, url_callback, amount: jumlah, customer_id: anggota_id
         };
 
-        const headers = {
-            'client-id': clientId,
-            'client-secret': clientSecret
-        };
+        const headers = { 'client-id': config.clientId, 'client-secret': config.clientSecret };
+
+        // --- Langkah 1: Simpan transaksi dan pembayaran dalam satu transaksi database ---
+        const [transaksiResult] = await connection.query(
+            `INSERT INTO transaksi (anggota_id, jenis_simpanan_id, tanggal_transaksi, jumlah, tipe_transaksi, keterangan) VALUES (?, ?, NOW(), ?, ?, ?)`,
+            [anggota_id, jenis_simpanan_id, jumlah, 'SETORAN ONLINE', keterangan]
+        );
+        const transaksiId = transaksiResult.insertId;
 
         const url = 'https://api.linkqu.id/linkqu-partner/transaction/create/qris';
-        console.log(`Memanggil API LinkQu.id untuk QRIS...`);
         const response = await axios.post(url, payload, { headers });
         const result = response.data;
-        console.log('API LinkQu.id berhasil dipanggil. Respons:', result);
 
-        // --- Langkah 3: Simpan detail pembayaran ke tabel `pembayaran_online` ---
-        console.log('Menyimpan detail pembayaran online...');
-        await db.query(
-            `INSERT INTO pembayaran_online (
-                transaksi_id, partner_reff, jumlah, jenis_pembayaran, qris_url,
-                status_pembayaran, expired_at, customer_id, raw_response
-            ) VALUES (?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), ?, ?)`,
-            [
-                transaksiId,
-                partner_reff,
-                result.amount,
-                'QRIS',
-                result.imageqris,
-                'PENDING',
-                expired,
-                anggota_id,
-                JSON.stringify(result)
-            ]
+        await connection.query(
+            `INSERT INTO pembayaran_online (transaksi_id, partner_reff, jumlah, jenis_pembayaran, qris_url, status_pembayaran, expired_at, customer_id, raw_response) VALUES (?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), ?, ?)`,
+            [transaksiId, partner_reff, result.amount, 'QRIS', result.imageqris, 'PENDING', expired, anggota_id, JSON.stringify(result)]
         );
-        console.log('Detail pembayaran online berhasil disimpan.');
 
+        await connection.commit();
         res.json(result);
+
     } catch (err) {
+        await connection.rollback();
         console.error(`❌ Gagal membuat QRIS: ${err.message}`);
-        res.status(500).json({
-            error: "Gagal membuat QRIS",
-            detail: err.response?.data || err.message
-        });
+        res.status(500).json({ error: "Gagal membuat QRIS", detail: err.response?.data || err.message });
+    } finally {
+        if (connection) connection.release();
     }
 });
 
-
-// Endpoint callback
+// --- ENDPOINT CALLBACK DARI LINKQU.ID ---
 app.post("/callback", async (req, res) => {
     console.log(`✅ Callback diterima: ${JSON.stringify(req.body)}`);
 
-    // Dapatkan koneksi transaksi dari pool
     const connection = await pool.getConnection();
 
     try {
+        await connection.beginTransaction();
         const { partner_reff } = req.body;
 
-        // Mulai transaksi
-        await connection.beginTransaction();
-
-        // 1. Ambil status pembayaran saat ini
         const [statusRows] = await connection.query(
             `SELECT status_pembayaran FROM pembayaran_online WHERE partner_reff = ? LIMIT 1`,
             [partner_reff]
@@ -348,62 +260,47 @@ app.post("/callback", async (req, res) => {
         if (statusRows.length > 0 && statusRows[0].status_pembayaran === 'SUKSES') {
             console.log(`ℹ️ Transaksi ${partner_reff} sudah SUKSES sebelumnya. Tidak diproses ulang.`);
             await connection.commit();
-            connection.release(); // Lepaskan koneksi
-            return res.status(200).json({
-                message: "Transaksi sudah SUKSES sebelumnya. Tidak diproses ulang."
-            });
+            res.status(200).json({ message: "Transaksi sudah SUKSES sebelumnya. Tidak diproses ulang." });
+            return;
         }
 
-        // 2. Periksa status pembayaran dari body callback
         const paymentStatusFromCallback = req.body.status;
         if (paymentStatusFromCallback === 'SUCCESS') {
-
-            // 3. Ambil jumlah dan anggota_id dari tabel transaksi dan pembayaran_online
             const [dataRows] = await connection.query(
-                `SELECT
-                    t.jumlah,
-                    t.anggota_id
-                FROM pembayaran_online AS po
-                JOIN transaksi AS t ON po.transaksi_id = t.id
-                WHERE po.partner_reff = ?
-                LIMIT 1`,
+                `SELECT t.jumlah, t.anggota_id FROM pembayaran_online AS po JOIN transaksi AS t ON po.transaksi_id = t.id WHERE po.partner_reff = ? LIMIT 1`,
                 [partner_reff]
             );
 
             if (dataRows.length === 0) {
                 console.error(`❌ Data transaksi tidak ditemukan untuk Partner Reff: ${partner_reff}.`);
                 await connection.rollback();
-                connection.release();
-                return res.status(404).json({ error: "Data transaksi tidak ditemukan." });
+                res.status(404).json({ error: "Data transaksi tidak ditemukan." });
+                return;
             }
 
             const { jumlah, anggota_id } = dataRows[0];
 
-            // 4. Perbarui saldo anggota
             await connection.query(
                 `UPDATE anggota SET saldo = saldo + ? WHERE id = ?`,
                 [jumlah, anggota_id]
             );
             console.log(`✅ Saldo anggota ID ${anggota_id} berhasil ditambahkan sejumlah ${jumlah}.`);
 
-            // 5. Perbarui status pembayaran
             await connection.query(
                 `UPDATE pembayaran_online SET status_pembayaran = 'SUKSES' WHERE partner_reff = ?`,
                 [partner_reff]
             );
             console.log(`✅ Status pembayaran untuk Partner Reff ${partner_reff} berhasil diperbarui menjadi SUKSES.`);
 
-            // Commit transaksi
             await connection.commit();
             console.log(`✅ Transaksi ${partner_reff} selesai diproses.`);
             res.status(200).json({ message: "Callback diterima dan saldo ditambahkan" });
 
         } else {
             console.log(`ℹ️ Callback untuk transaksi ${partner_reff} diterima, tetapi statusnya bukan SUCCESS. Tidak ada perubahan.`);
+            await connection.rollback();
             res.status(200).json({ message: "Callback diterima, tetapi pembayaran belum SUKSES" });
-            await connection.rollback(); // Rollback jika status tidak SUKSES
         }
-
     } catch (err) {
         await connection.rollback();
         console.error(`❌ Gagal memproses callback: ${err.message}`);
@@ -415,6 +312,7 @@ app.post("/callback", async (req, res) => {
         if (connection) connection.release();
     }
 });
+
 
 // Endpoint untuk mendaftarkan anggota baru
 app.get('/api/member-details', async (req, res) => {
