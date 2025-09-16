@@ -326,16 +326,6 @@ app.post('/create-qris', async (req, res) => {
 });
 
 
-// Endpoint callback yang sudah diperbarui
-// Pastikan Anda mengimpor pool dengan benar
-const mysql = require("mysql2/promise");
-const pool = mysql.createPool({
-    host: 'localhost',
-    user: 'root',
-    password: '',
-    database: 'nama_database_anda'
-});
-
 // Endpoint callback
 app.post("/callback", async (req, res) => {
     console.log(`✅ Callback diterima: ${JSON.stringify(req.body)}`);
