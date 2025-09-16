@@ -233,6 +233,47 @@ app.post('/create-qris', async (req, res) => {
     }
 });
 
+app.get('/download-qris/:partner_reff', async (req, res) => {
+    const partner_reff = req.params.partner_reff;
+    logToFile(`✅ Menerima permintaan untuk mengunduh QRIS dengan partner_reff: ${partner_reff}`);
+
+    // Mengambil koneksi dari pool
+    const connection = await pool.getConnection();
+
+    try {
+        // Query untuk mengambil data gambar BLOB dari tabel pembayaran_online
+        const [rows] = await connection.query(
+            `SELECT qris_image FROM pembayaran_online WHERE partner_reff = ? LIMIT 1`,
+            [partner_reff]
+        );
+
+        // Memeriksa apakah data ditemukan
+        if (rows.length === 0 || !rows[0].qris_image) {
+            logToFile(`❌ QRIS tidak ditemukan atau tidak memiliki gambar untuk partner_reff: ${partner_reff}`);
+            return res.status(404).send('QRIS tidak ditemukan atau tidak memiliki data gambar.');
+        }
+
+        const qrisImageBlob = rows[0].qris_image;
+
+        // Mengatur header respons untuk file yang dapat diunduh
+        res.setHeader('Content-Disposition', `attachment; filename="qris-${partner_reff}.png"`);
+        res.setHeader('Content-Type', 'image/png');
+
+        // Mengirimkan data BLOB langsung sebagai respons
+        // MySQL driver akan mengembalikan data BLOB sebagai Buffer secara default,
+        // sehingga Anda bisa langsung mengirimkannya.
+        return res.send(qrisImageBlob);
+
+    } catch (err) {
+        logToFile(`❌ Error saat mengunduh QRIS: ${err.message}`);
+        console.error(err);
+        res.status(500).send('Terjadi kesalahan server saat mengunduh gambar.');
+    } finally {
+        // Pastikan koneksi dikembalikan ke pool
+        if (connection) connection.release();
+    }
+});
+
 app.post("/callback", async (req, res) => {
     logToFile(`✅ Callback diterima: ${JSON.stringify(req.body)}`);
     const connection = await pool.getConnection();
