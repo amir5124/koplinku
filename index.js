@@ -34,7 +34,7 @@ const config = {
 // --- DATABASE CONNECTION POOL ---
 const pool = mysql.createPool(config.db);
 
-// Middleware untuk mem-parsing body request
+// Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cors());
@@ -51,8 +51,12 @@ function logToFile(message) {
     });
 }
 
-function getExpiredTimestamp(minutesFromNow = 15) {
-    return moment.tz('Asia/Jakarta').add(minutesFromNow, 'minutes').format('YYYYMMDDHHmmss');
+function getExpiredTimestampLinkqu() {
+    return moment.tz('Asia/Jakarta').add(15, 'minutes').format('YYYYMMDDHHmmss');
+}
+
+function getExpiredTimestampDb() {
+    return moment.tz('Asia/Jakarta').add(15, 'minutes').unix();
 }
 
 function generateSignatureVA({ amount, expired, bank_code, partner_reff, customer_id, customer_name, customer_email, clientId, serverKey }) {
@@ -95,11 +99,12 @@ app.post('/create-va', async (req, res) => {
         }
 
         const partner_reff = generatePartnerReff();
-        const expired = getExpiredTimestamp();
+        const expiredLinkqu = getExpiredTimestampLinkqu();
+        const expiredDb = getExpiredTimestampDb();
         const url_callback = "https://kop.siappgo.id/callback";
-        const signature = generateSignatureVA({ amount: jumlah, expired, bank_code, partner_reff, customer_id: anggota_id, customer_name: body.customer_name, customer_email: body.customer_email, clientId: config.clientId, serverKey: config.serverKey });
+        const signature = generateSignatureVA({ amount: jumlah, expired: expiredLinkqu, bank_code, partner_reff, customer_id: anggota_id, customer_name: body.customer_name, customer_email: body.customer_email, clientId: config.clientId, serverKey: config.serverKey });
 
-        const payload = { ...body, partner_reff, username: config.username, pin: config.pin, expired, signature, url_callback, amount: jumlah, customer_id: anggota_id };
+        const payload = { ...body, partner_reff, username: config.username, pin: config.pin, expired: expiredLinkqu, signature, url_callback, amount: jumlah, customer_id: anggota_id };
         const headers = { 'client-id': config.clientId, 'client-secret': config.clientSecret };
 
         const [transaksiResult] = await connection.query(
@@ -114,7 +119,7 @@ app.post('/create-va', async (req, res) => {
 
         await connection.query(
             `INSERT INTO pembayaran_online (transaksi_id, partner_reff, jumlah, jenis_pembayaran, va_number, status_pembayaran, expired_at, customer_id, raw_response) VALUES (?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), ?, ?)`,
-            [transaksiId, partner_reff, result.amount, 'VA', result.virtual_account, 'PENDING', expired, anggota_id, JSON.stringify(result)]
+            [transaksiId, partner_reff, result.amount, 'VA', result.virtual_account, 'PENDING', expiredDb, anggota_id, JSON.stringify(result)]
         );
 
         await connection.commit();
@@ -130,34 +135,29 @@ app.post('/create-va', async (req, res) => {
 
 app.post('/create-qris', async (req, res) => {
     logToFile('✅ Menerima permintaan untuk membuat QRIS...');
-
-    // Mengambil koneksi dari pool
     const connection = await pool.getConnection();
 
     try {
-        // Memulai transaksi database
         await connection.beginTransaction();
-
         const body = req.body;
         const { jumlah, keterangan, anggota_id, jenis_simpanan_id } = body;
 
-        // Validasi data input
         if (!anggota_id || !jumlah || !jenis_simpanan_id) {
             await connection.rollback();
             return res.status(400).json({ error: "Data tidak lengkap" });
         }
 
-        // 1. Persiapan data untuk LinkQu
         const partner_reff = generatePartnerReff();
-        const expired = getExpiredTimestamp();
+        const expiredLinkqu = getExpiredTimestampLinkqu();
+        const expiredDb = getExpiredTimestampDb();
         const url_callback = "https://kop.siappgo.id/callback";
         const signature = generateSignatureQRIS({
             amount: jumlah,
-            expired,
+            expired: expiredLinkqu,
             partner_reff,
             customer_id: anggota_id,
-            customer_name: body.customer_name || '', // Pastikan ini tidak null
-            customer_email: body.customer_email || '', // Pastikan ini tidak null
+            customer_name: body.customer_name || '',
+            customer_email: body.customer_email || '',
             clientId: config.clientId,
             serverKey: config.serverKey
         });
@@ -167,7 +167,7 @@ app.post('/create-qris', async (req, res) => {
             partner_reff,
             username: config.username,
             pin: config.pin,
-            expired,
+            expired: expiredLinkqu,
             signature,
             url_callback,
             amount: jumlah,
@@ -178,57 +178,43 @@ app.post('/create-qris', async (req, res) => {
             'client-secret': config.clientSecret
         };
 
-        // 2. Insert ke tabel `transaksi` terlebih dahulu
         const [transaksiResult] = await connection.query(
             `INSERT INTO transaksi (anggota_id, jenis_simpanan_id, tanggal_transaksi, jumlah, tipe_transaksi, keterangan) VALUES (?, ?, NOW(), ?, ?, ?)`,
             [anggota_id, jenis_simpanan_id, jumlah, 'SETORAN ONLINE', keterangan]
         );
         const transaksiId = transaksiResult.insertId;
 
-        // 3. Panggil API LinkQu untuk membuat QRIS
         const url = 'https://api.linkqu.id/linkqu-partner/transaction/create/qris';
         const response = await axios.post(url, payload, { headers });
         const result = response.data;
 
-        // 4. Unduh gambar QRIS dari URL dan ubah menjadi Buffer
         let qrisImageBuffer = null;
         if (result?.imageqris) {
             try {
-                // Menggunakan responseType: 'arraybuffer' untuk mendapatkan data biner
                 const imgResp = await axios.get(result.imageqris.trim(), { responseType: 'arraybuffer' });
-                qrisImageBuffer = imgResp.data; // Data ini adalah buffer, siap untuk disimpan
+                qrisImageBuffer = imgResp.data;
             } catch (err) {
                 console.error("⚠️ Gagal mengunduh gambar QRIS:", err.message);
-                // Lanjutkan proses meskipun gambar gagal diunduh, tapi log errornya
-                // Anda bisa memilih untuk meng-abort transaksi jika gambar penting
             }
         }
 
-        // 5. Simpan data pembayaran online, termasuk gambar BLOB
         await connection.query(
             `INSERT INTO pembayaran_online (transaksi_id, partner_reff, jumlah, jenis_pembayaran, qris_url, status_pembayaran, expired_at, customer_id, raw_response, qris_image) VALUES (?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), ?, ?, ?)`,
-            [transaksiId, partner_reff, result.amount, 'QRIS', result.imageqris, 'PENDING', expired, anggota_id, JSON.stringify(result), qrisImageBuffer]
+            [transaksiId, partner_reff, result.amount, 'QRIS', result.imageqris, 'PENDING', expiredDb, anggota_id, JSON.stringify(result), qrisImageBuffer]
         );
 
-        // 6. Jika semua query berhasil, lakukan commit
         await connection.commit();
         logToFile(`✅ QRIS berhasil dibuat untuk transaksi ID: ${transaksiId}`);
-
-        // 7. Kirimkan respons ke klien
         res.json(result);
 
     } catch (err) {
-        // Jika ada error, lakukan rollback
         await connection.rollback();
         logToFile(`❌ Gagal membuat QRIS: ${err.message}`);
-
-        // Kirimkan respons error ke klien
         res.status(500).json({
             error: "Gagal membuat QRIS",
             detail: err.response?.data || err.message
         });
     } finally {
-        // Pastikan koneksi dikembalikan ke pool
         if (connection) connection.release();
     }
 });
@@ -236,18 +222,14 @@ app.post('/create-qris', async (req, res) => {
 app.get('/download-qris/:partner_reff', async (req, res) => {
     const partner_reff = req.params.partner_reff;
     logToFile(`✅ Menerima permintaan untuk mengunduh QRIS dengan partner_reff: ${partner_reff}`);
-
-    // Mengambil koneksi dari pool
     const connection = await pool.getConnection();
 
     try {
-        // Query untuk mengambil data gambar BLOB dari tabel pembayaran_online
         const [rows] = await connection.query(
             `SELECT qris_image FROM pembayaran_online WHERE partner_reff = ? LIMIT 1`,
             [partner_reff]
         );
 
-        // Memeriksa apakah data ditemukan
         if (rows.length === 0 || !rows[0].qris_image) {
             logToFile(`❌ QRIS tidak ditemukan atau tidak memiliki gambar untuk partner_reff: ${partner_reff}`);
             return res.status(404).send('QRIS tidak ditemukan atau tidak memiliki data gambar.');
@@ -255,13 +237,8 @@ app.get('/download-qris/:partner_reff', async (req, res) => {
 
         const qrisImageBlob = rows[0].qris_image;
 
-        // Mengatur header respons untuk file yang dapat diunduh
         res.setHeader('Content-Disposition', `attachment; filename="qris-${partner_reff}.png"`);
         res.setHeader('Content-Type', 'image/png');
-
-        // Mengirimkan data BLOB langsung sebagai respons
-        // MySQL driver akan mengembalikan data BLOB sebagai Buffer secara default,
-        // sehingga Anda bisa langsung mengirimkannya.
         return res.send(qrisImageBlob);
 
     } catch (err) {
@@ -269,7 +246,6 @@ app.get('/download-qris/:partner_reff', async (req, res) => {
         console.error(err);
         res.status(500).send('Terjadi kesalahan server saat mengunduh gambar.');
     } finally {
-        // Pastikan koneksi dikembalikan ke pool
         if (connection) connection.release();
     }
 });
@@ -277,14 +253,15 @@ app.get('/download-qris/:partner_reff', async (req, res) => {
 app.get('/cek-status-pembayaran-by-customer/:customer_id', async (req, res) => {
     const customer_id = req.params.customer_id;
     console.log(`✅ Menerima permintaan cek status untuk customer_id: ${customer_id}`);
-
     const connection = await pool.getConnection();
 
     try {
-        // Query database untuk mengambil transaksi terbaru berdasarkan customer_id
-        // Menggunakan ORDER BY dan LIMIT untuk mendapatkan transaksi terakhir
         const [rows] = await connection.query(
-            `SELECT status_pembayaran FROM pembayaran_online WHERE customer_id = ? ORDER BY created_at DESC LIMIT 1`,
+            `SELECT
+                status_pembayaran, jenis_pembayaran, va_number, qris_url, jumlah, expired_at, keterangan, id_pembayaran, partner_reff
+            FROM pembayaran_online
+            WHERE customer_id = ?
+            ORDER BY created_at DESC LIMIT 1`,
             [customer_id]
         );
 
@@ -293,10 +270,12 @@ app.get('/cek-status-pembayaran-by-customer/:customer_id', async (req, res) => {
             return res.status(404).json({ error: "Tidak ada transaksi ditemukan." });
         }
 
-        const status = rows[0].status_pembayaran;
+        const latestTransaction = rows[0];
 
-        // Kirimkan status pembayaran sebagai respons
-        res.json({ status: status });
+        res.json({
+            status: latestTransaction.status_pembayaran,
+            data: latestTransaction
+        });
 
     } catch (err) {
         logToFile(`❌ Error saat cek status pembayaran by customer: ${err.message}`);
@@ -309,11 +288,9 @@ app.get('/cek-status-pembayaran-by-customer/:customer_id', async (req, res) => {
 app.get('/cek-history-pembayaran/:anggota_id', async (req, res) => {
     const anggotaId = req.params.anggota_id;
     logToFile(`✅ Menerima permintaan riwayat pembayaran untuk anggota_id: ${anggotaId}`);
-
     const connection = await pool.getConnection();
 
     try {
-        // Query database untuk mengambil riwayat pembayaran dengan JOIN
         const query = `
             SELECT
                 po.id_pembayaran,
@@ -338,15 +315,11 @@ app.get('/cek-history-pembayaran/:anggota_id', async (req, res) => {
         `;
 
         const [rows] = await connection.query(query, [anggotaId]);
-
         if (rows.length === 0) {
             logToFile(`❌ Tidak ada riwayat transaksi ditemukan untuk anggota_id: ${anggotaId}`);
             return res.status(404).json({ error: "Tidak ada riwayat transaksi ditemukan." });
         }
-
-        // Kirimkan riwayat pembayaran sebagai respons
         res.json({ history: rows });
-
     } catch (err) {
         logToFile(`❌ Error saat mengambil riwayat pembayaran: ${err.message}`);
         res.status(500).json({ error: "Terjadi kesalahan server saat mengambil riwayat pembayaran." });
@@ -354,7 +327,6 @@ app.get('/cek-history-pembayaran/:anggota_id', async (req, res) => {
         if (connection) connection.release();
     }
 });
-
 
 app.post("/callback", async (req, res) => {
     logToFile(`✅ Callback diterima: ${JSON.stringify(req.body)}`);
@@ -407,7 +379,6 @@ app.post("/callback", async (req, res) => {
     }
 });
 
-// --- ENDPOINT MANAJEMEN ANGGOTA ---
 app.get('/api/member-details', async (req, res) => {
     logToFile('API /api/member-details dipanggil.');
     const { nama } = req.query;
