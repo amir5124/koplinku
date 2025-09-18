@@ -78,7 +78,7 @@ function generateSignatureQRIS({ amount, expired, partner_reff, customer_id, cus
 }
 
 function generatePartnerReff() {
-    const prefix = 'INV-782372373627';
+    const prefix = 'INV';
     const timestamp = Date.now();
     const randomStr = crypto.randomBytes(4).toString('hex');
     return `${prefix}-${timestamp}-${randomStr}`;
@@ -86,19 +86,14 @@ function generatePartnerReff() {
 
 // --- ENDPOINT PEMBAYARAN ---
 app.post('/create-va', async (req, res) => {
-    console.log('✅ Menerima permintaan untuk membuat Virtual Account (VA)...');
-
+    logToFile('✅ Menerima permintaan untuk membuat Virtual Account (VA)...');
     const connection = await pool.getConnection();
 
     try {
         await connection.beginTransaction();
         const body = req.body;
         const { jumlah, keterangan, anggota_id, jenis_simpanan_id, bank_code } = body;
-
-        console.log(`[REQUEST PAYLOAD]: ${JSON.stringify(body)}`);
-
         if (!anggota_id || !jumlah || !jenis_simpanan_id) {
-            console.log('❌ Data tidak lengkap. Menghentikan transaksi.');
             await connection.rollback();
             return res.status(400).json({ error: "Data tidak lengkap" });
         }
@@ -107,55 +102,34 @@ app.post('/create-va', async (req, res) => {
         const expiredLinkqu = getExpiredTimestampLinkqu();
         const expiredDb = getExpiredTimestampDb();
         const url_callback = "https://kop.siappgo.id/callback";
-
-        console.log(`[GENERATED VALUES]: partner_reff: ${partner_reff}, expiredLinkqu: ${expiredLinkqu}, expiredDb: ${expiredDb}`);
-
         const signature = generateSignatureVA({ amount: jumlah, expired: expiredLinkqu, bank_code, partner_reff, customer_id: anggota_id, customer_name: body.customer_name, customer_email: body.customer_email, clientId: config.clientId, serverKey: config.serverKey });
 
         const payload = { ...body, partner_reff, username: config.username, pin: config.pin, expired: expiredLinkqu, signature, url_callback, amount: jumlah, customer_id: anggota_id };
         const headers = { 'client-id': config.clientId, 'client-secret': config.clientSecret };
-
-        console.log(`[LINKQU PAYLOAD]: ${JSON.stringify(payload)}`);
-        console.log(`[LINKQU HEADERS]: ${JSON.stringify(headers)}`);
 
         const [transaksiResult] = await connection.query(
             `INSERT INTO transaksi (anggota_id, jenis_simpanan_id, tanggal_transaksi, jumlah, tipe_transaksi, keterangan) VALUES (?, ?, NOW(), ?, ?, ?)`,
             [anggota_id, jenis_simpanan_id, jumlah, 'SETORAN ONLINE', keterangan]
         );
         const transaksiId = transaksiResult.insertId;
-        console.log(`[DB INSERT]: Berhasil membuat transaksi dengan ID: ${transaksiId}`);
 
         const url = 'https://api.linkqu.id/linkqu-partner/transaction/create/va';
         const response = await axios.post(url, payload, { headers });
         const result = response.data;
 
-        console.log(`[LINKQU RESPONSE]: ${JSON.stringify(result)}`);
-
-        // Cek jika ada error dari LinkQu
-        if (result.status !== '00') {
-            await connection.rollback();
-            console.log(`❌ LinkQu mengembalikan status error: ${result.status} - ${result.message}`);
-            return res.status(400).json({ error: result.message, linkqu_status: result.status });
-        }
-
         await connection.query(
             `INSERT INTO pembayaran_online (transaksi_id, partner_reff, jumlah, jenis_pembayaran, va_number, status_pembayaran, expired_at, customer_id, raw_response) VALUES (?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), ?, ?)`,
             [transaksiId, partner_reff, result.amount, 'VA', result.virtual_account, 'PENDING', expiredDb, anggota_id, JSON.stringify(result)]
         );
-        console.log('[DB INSERT]: Berhasil menyimpan data pembayaran online.');
 
         await connection.commit();
-        console.log('✅ Transaksi berhasil. Mengirim respons ke klien.');
         res.json(result);
-
     } catch (err) {
         await connection.rollback();
-        console.log(`❌ Gagal membuat VA: ${err.message}`);
-        console.log(`[ERROR DETAIL]: ${JSON.stringify(err.response?.data || { message: err.message, stack: err.stack })}`);
+        logToFile(`❌ Gagal membuat VA: ${err.message}`);
         res.status(500).json({ error: "Gagal membuat VA", detail: err.response?.data || err.message });
     } finally {
         if (connection) connection.release();
-        console.log('--------------------------------------');
     }
 });
 
