@@ -303,7 +303,11 @@ app.get('/cek-history-pembayaran/:anggota_id', async (req, res) => {
                 po.expired_at,
                 po.created_at,
                 t.keterangan,
-                t.tipe_transaksi
+                t.tipe_transaksi,
+                CASE
+                    WHEN po.jenis_pembayaran = 'VA' THEN JSON_EXTRACT(po.raw_response, '$.bank_name')
+                    ELSE NULL
+                END AS bank_name
             FROM
                 pembayaran_online AS po
             JOIN
