@@ -448,7 +448,7 @@ app.get('/api/check-member', async (req, res) => {
 
 // Endpoint untuk mendapatkan seluruh riwayat pembayaran dengan filter
 app.get('/api/history-pembayaran-all', async (req, res) => {
-    logToFile('✅ Menerima permintaan riwayat pembayaran semua anggota');
+    console.log('✅ Menerima permintaan riwayat pembayaran semua anggota');
     const connection = await pool.getConnection();
 
     try {
@@ -491,12 +491,14 @@ app.get('/api/history-pembayaran-all', async (req, res) => {
 
         const [rows] = await connection.query(query, params);
         if (rows.length === 0) {
-            logToFile(`❌ Tidak ada riwayat transaksi ditemukan.`);
+            // Mengubah logToFile menjadi console.log
+            console.log(`❌ Tidak ada riwayat transaksi ditemukan.`);
             return res.status(404).json({ error: "Tidak ada riwayat transaksi ditemukan." });
         }
         res.json({ history: rows });
     } catch (err) {
-        logToFile(`❌ Error saat mengambil riwayat pembayaran: ${err.message}`);
+        // Mengubah logToFile menjadi console.log
+        console.log(`❌ Error saat mengambil riwayat pembayaran: ${err.message}`);
         res.status(500).json({ error: "Terjadi kesalahan server saat mengambil riwayat pembayaran." });
     } finally {
         if (connection) connection.release();
