@@ -452,7 +452,7 @@ app.get('/api/history-pembayaran-all', async (req, res) => {
     const connection = await pool.getConnection();
 
     try {
-        const { search } = req.query; // Ambil parameter pencarian dari query string
+        const { search } = req.query;
         let query = `
             SELECT
                 po.id_pembayaran,
@@ -464,6 +464,7 @@ app.get('/api/history-pembayaran-all', async (req, res) => {
                 t.keterangan,
                 t.tipe_transaksi,
                 a.nama AS nama_anggota,
+                js.nama_simpanan AS jenis_simpanan, // Menambahkan nama jenis simpanan
                 CASE
                     WHEN po.jenis_pembayaran = 'VA' THEN JSON_EXTRACT(po.raw_response, '$.bank_name')
                     ELSE NULL
@@ -474,12 +475,13 @@ app.get('/api/history-pembayaran-all', async (req, res) => {
                 transaksi AS t ON po.transaksi_id = t.id
             JOIN
                 anggota AS a ON t.anggota_id = a.id
+            JOIN
+                jenis_simpanan AS js ON t.jenis_simpanan_id = js.id // Menambahkan JOIN ke tabel jenis_simpanan
             WHERE
                 po.status_pembayaran = 'SUKSES'
         `;
         let params = [];
 
-        // Jika ada parameter pencarian, tambahkan kondisi WHERE
         if (search) {
             query += ` AND a.nama LIKE ?`;
             params.push(`%${search}%`);
