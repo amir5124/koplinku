@@ -475,7 +475,7 @@ app.get('/api/history-pembayaran-all', async (req, res) => {
             SELECT
                 po.id_pembayaran,
                 po.partner_reff,
-                po.jumlah,
+                po.jumlah AS jumlah_kotor,
                 po.jenis_pembayaran,
                 po.status_pembayaran,
                 po.created_at,
@@ -486,7 +486,21 @@ app.get('/api/history-pembayaran-all', async (req, res) => {
                 CASE
                     WHEN po.jenis_pembayaran = 'VA' THEN JSON_EXTRACT(po.raw_response, '$.bank_name')
                     ELSE NULL
-                END AS bank_name
+                END AS bank_name,
+                -- Hitung biaya admin berdasarkan jenis pembayaran
+                CASE
+                    WHEN po.jenis_pembayaran = 'QRIS' THEN CEIL(po.jumlah * 0.008)
+                    WHEN po.jenis_pembayaran = 'VA' THEN 2500
+                    ELSE 0
+                END AS biaya_admin,
+                -- Hitung jumlah bersih (nominal yang masuk ke saldo anggota)
+                po.jumlah - (
+                    CASE
+                        WHEN po.jenis_pembayaran = 'QRIS' THEN CEIL(po.jumlah * 0.008)
+                        WHEN po.jenis_pembayaran = 'VA' THEN 2500
+                        ELSE 0
+                    END
+                ) AS jumlah_bersih
             FROM
                 pembayaran_online AS po
             JOIN
@@ -516,12 +530,24 @@ app.get('/api/history-pembayaran-all', async (req, res) => {
 
         query += ` ORDER BY po.created_at DESC;`;
 
-        // Query untuk menghitung total nominal
+        // Query untuk menghitung total nominal bersih dari transaksi SUKSES
         let totalNominalQuery = `
-            SELECT SUM(po.jumlah) AS total_nominal
-            FROM pembayaran_online AS po
-            JOIN transaksi AS t ON po.transaksi_id = t.id
-            WHERE po.status_pembayaran = 'SUKSES'
+            SELECT
+                SUM(
+                    po.jumlah - (
+                        CASE
+                            WHEN po.jenis_pembayaran = 'QRIS' THEN CEIL(po.jumlah * 0.008)
+                            WHEN po.jenis_pembayaran = 'VA' THEN 2500
+                            ELSE 0
+                        END
+                    )
+                ) AS total_nominal
+            FROM
+                pembayaran_online AS po
+            JOIN
+                transaksi AS t ON po.transaksi_id = t.id
+            WHERE
+                po.status_pembayaran = 'SUKSES'
         `;
         let totalNominalParams = [];
 
@@ -540,7 +566,7 @@ app.get('/api/history-pembayaran-all', async (req, res) => {
 
         res.json({
             history: rows,
-            total_nominal: total_nominal // Kirim total nominal ke frontend
+            total_nominal: total_nominal
         });
 
     } catch (err) {
