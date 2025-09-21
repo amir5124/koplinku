@@ -464,7 +464,7 @@ app.get('/api/history-pembayaran-all', async (req, res) => {
                 t.keterangan,
                 t.tipe_transaksi,
                 a.nama AS nama_anggota,
-                js.nama_simpanan AS jenis_simpanan, // Menambahkan nama jenis simpanan
+                js.nama_simpanan AS jenis_simpanan,
                 CASE
                     WHEN po.jenis_pembayaran = 'VA' THEN JSON_EXTRACT(po.raw_response, '$.bank_name')
                     ELSE NULL
@@ -476,7 +476,7 @@ app.get('/api/history-pembayaran-all', async (req, res) => {
             JOIN
                 anggota AS a ON t.anggota_id = a.id
             JOIN
-                jenis_simpanan AS js ON t.jenis_simpanan_id = js.id // Menambahkan JOIN ke tabel jenis_simpanan
+                jenis_simpanan AS js ON t.jenis_simpanan_id = js.id
             WHERE
                 po.status_pembayaran = 'SUKSES'
         `;
@@ -491,13 +491,11 @@ app.get('/api/history-pembayaran-all', async (req, res) => {
 
         const [rows] = await connection.query(query, params);
         if (rows.length === 0) {
-            // Mengubah logToFile menjadi console.log
             console.log(`❌ Tidak ada riwayat transaksi ditemukan.`);
             return res.status(404).json({ error: "Tidak ada riwayat transaksi ditemukan." });
         }
         res.json({ history: rows });
     } catch (err) {
-        // Mengubah logToFile menjadi console.log
         console.log(`❌ Error saat mengambil riwayat pembayaran: ${err.message}`);
         res.status(500).json({ error: "Terjadi kesalahan server saat mengambil riwayat pembayaran." });
     } finally {
