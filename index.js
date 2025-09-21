@@ -444,6 +444,63 @@ app.get('/api/check-member', async (req, res) => {
     }
 });
 
+// app.js atau server.js
+
+// Endpoint untuk mendapatkan seluruh riwayat pembayaran dengan filter
+app.get('/api/history-pembayaran-all', async (req, res) => {
+    logToFile('✅ Menerima permintaan riwayat pembayaran semua anggota');
+    const connection = await pool.getConnection();
+
+    try {
+        const { search } = req.query; // Ambil parameter pencarian dari query string
+        let query = `
+            SELECT
+                po.id_pembayaran,
+                po.partner_reff,
+                po.jumlah,
+                po.jenis_pembayaran,
+                po.status_pembayaran,
+                po.created_at,
+                t.keterangan,
+                t.tipe_transaksi,
+                a.nama AS nama_anggota,
+                CASE
+                    WHEN po.jenis_pembayaran = 'VA' THEN JSON_EXTRACT(po.raw_response, '$.bank_name')
+                    ELSE NULL
+                END AS bank_name
+            FROM
+                pembayaran_online AS po
+            JOIN
+                transaksi AS t ON po.transaksi_id = t.id
+            JOIN
+                anggota AS a ON t.anggota_id = a.id
+            WHERE
+                po.status_pembayaran = 'SUKSES'
+        `;
+        let params = [];
+
+        // Jika ada parameter pencarian, tambahkan kondisi WHERE
+        if (search) {
+            query += ` AND a.nama LIKE ?`;
+            params.push(`%${search}%`);
+        }
+
+        query += ` ORDER BY po.created_at DESC;`;
+
+        const [rows] = await connection.query(query, params);
+        if (rows.length === 0) {
+            logToFile(`❌ Tidak ada riwayat transaksi ditemukan.`);
+            return res.status(404).json({ error: "Tidak ada riwayat transaksi ditemukan." });
+        }
+        res.json({ history: rows });
+    } catch (err) {
+        logToFile(`❌ Error saat mengambil riwayat pembayaran: ${err.message}`);
+        res.status(500).json({ error: "Terjadi kesalahan server saat mengambil riwayat pembayaran." });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
 // --- MENJALANKAN SERVER ---
 app.listen(port, () => {
     console.log(`Server berjalan di http://localhost:${port}`);
