@@ -338,7 +338,10 @@ app.post("/callback", async (req, res) => {
 
     try {
         await connection.beginTransaction();
-        const { partner_reff } = req.body;
+
+        // Ekstrak data yang diperlukan dari callback, termasuk 'amount' dan 'va_code'
+        const { partner_reff, status, amount, va_code } = req.body;
+
         const [statusRows] = await connection.query(`SELECT status_pembayaran FROM pembayaran_online WHERE partner_reff = ? LIMIT 1`, [partner_reff]);
 
         if (statusRows.length > 0 && statusRows[0].status_pembayaran === 'SUKSES') {
@@ -348,9 +351,10 @@ app.post("/callback", async (req, res) => {
             return;
         }
 
-        const paymentStatusFromCallback = req.body.status;
+        const paymentStatusFromCallback = status; // Gunakan 'status' dari callback
+
         if (paymentStatusFromCallback === 'SUCCESS') {
-            const [dataRows] = await connection.query(`SELECT t.jumlah, t.anggota_id FROM pembayaran_online AS po JOIN transaksi AS t ON po.transaksi_id = t.id WHERE po.partner_reff = ? LIMIT 1`, [partner_reff]);
+            const [dataRows] = await connection.query(`SELECT t.anggota_id FROM pembayaran_online AS po JOIN transaksi AS t ON po.transaksi_id = t.id WHERE po.partner_reff = ? LIMIT 1`, [partner_reff]);
 
             if (dataRows.length === 0) {
                 logToFile(`❌ Data transaksi tidak ditemukan untuk Partner Reff: ${partner_reff}.`);
@@ -359,10 +363,24 @@ app.post("/callback", async (req, res) => {
                 return;
             }
 
-            const { jumlah, anggota_id } = dataRows[0];
-            await connection.query(`UPDATE anggota SET saldo = saldo + ? WHERE id = ?`, [jumlah, anggota_id]);
-            logToFile(`✅ Saldo anggota ID ${anggota_id} berhasil ditambahkan sejumlah ${jumlah}.`);
+            const { anggota_id } = dataRows[0];
 
+            // Logika perhitungan biaya admin
+            let adminFee;
+            if (va_code === "QRIS") {
+                // Biaya 0.8% dari nominal kotor, dibulatkan ke atas (menggunakan Math.ceil)
+                adminFee = Math.ceil(amount * 0.008);
+            } else {
+                // Biaya tetap untuk metode non-QRIS
+                adminFee = 2500;
+            }
+            const netAmount = amount - adminFee;
+
+            // Perbarui saldo anggota dengan nominal bersih (netAmount)
+            await connection.query(`UPDATE anggota SET saldo = saldo + ? WHERE id = ?`, [netAmount, anggota_id]);
+            logToFile(`✅ Saldo anggota ID ${anggota_id} berhasil ditambahkan sejumlah ${netAmount}. Biaya admin: ${adminFee}.`);
+
+            // Perbarui status pembayaran di tabel pembayaran_online
             await connection.query(`UPDATE pembayaran_online SET status_pembayaran = 'SUKSES' WHERE partner_reff = ?`, [partner_reff]);
             logToFile(`✅ Status pembayaran untuk Partner Reff ${partner_reff} berhasil diperbarui menjadi SUKSES.`);
 
@@ -452,7 +470,7 @@ app.get('/api/history-pembayaran-all', async (req, res) => {
     const connection = await pool.getConnection();
 
     try {
-        const { search, status, jenis_simpanan_id } = req.query; // Ambil parameter filter baru
+        const { search, status, jenis_simpanan_id } = req.query;
         let query = `
             SELECT
                 po.id_pembayaran,
@@ -478,11 +496,11 @@ app.get('/api/history-pembayaran-all', async (req, res) => {
             JOIN
                 jenis_simpanan AS js ON t.jenis_simpanan_id = js.id
             WHERE
-                1=1 
+                1=1
         `;
         let params = [];
 
-        // Tambahkan kondisi filter berdasarkan parameter
+        // Tambahkan kondisi filter
         if (status && status !== 'ALL') {
             query += ` AND po.status_pembayaran = ?`;
             params.push(status);
@@ -498,8 +516,33 @@ app.get('/api/history-pembayaran-all', async (req, res) => {
 
         query += ` ORDER BY po.created_at DESC;`;
 
+        // Query untuk menghitung total nominal
+        let totalNominalQuery = `
+            SELECT SUM(po.jumlah) AS total_nominal
+            FROM pembayaran_online AS po
+            JOIN transaksi AS t ON po.transaksi_id = t.id
+            WHERE po.status_pembayaran = 'SUKSES'
+        `;
+        let totalNominalParams = [];
+
+        // Jika ada filter jenis_simpanan, tambahkan ke query total
+        if (jenis_simpanan_id && jenis_simpanan_id !== 'ALL') {
+            totalNominalQuery += ` AND t.jenis_simpanan_id = ?`;
+            totalNominalParams.push(jenis_simpanan_id);
+        }
+
+        // Jalankan kedua query secara paralel
         const [rows] = await connection.query(query, params);
-        res.json({ history: rows });
+        const [totalNominalResult] = await connection.query(totalNominalQuery, totalNominalParams);
+
+        // Ambil nilai total nominal, pastikan bukan null
+        const total_nominal = totalNominalResult[0].total_nominal || 0;
+
+        res.json({
+            history: rows,
+            total_nominal: total_nominal // Kirim total nominal ke frontend
+        });
+
     } catch (err) {
         console.log(`❌ Error saat mengambil riwayat pembayaran: ${err.message}`);
         res.status(500).json({ error: "Terjadi kesalahan server saat mengambil riwayat pembayaran." });
