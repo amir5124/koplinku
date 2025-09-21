@@ -333,7 +333,7 @@ app.get('/cek-history-pembayaran/:anggota_id', async (req, res) => {
 });
 
 app.post("/callback", async (req, res) => {
-    logToFile(`✅ Callback diterima: ${JSON.stringify(req.body)}`);
+    console.log(`✅ Callback diterima: ${JSON.stringify(req.body)}`);
     const connection = await pool.getConnection();
 
     try {
