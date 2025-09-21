@@ -452,7 +452,7 @@ app.get('/api/history-pembayaran-all', async (req, res) => {
     const connection = await pool.getConnection();
 
     try {
-        const { search } = req.query;
+        const { search, status, jenis_simpanan_id } = req.query; // Ambil parameter filter baru
         let query = `
             SELECT
                 po.id_pembayaran,
@@ -478,10 +478,19 @@ app.get('/api/history-pembayaran-all', async (req, res) => {
             JOIN
                 jenis_simpanan AS js ON t.jenis_simpanan_id = js.id
             WHERE
-                po.status_pembayaran = 'SUKSES'
+                1=1 
         `;
         let params = [];
 
+        // Tambahkan kondisi filter berdasarkan parameter
+        if (status && status !== 'ALL') {
+            query += ` AND po.status_pembayaran = ?`;
+            params.push(status);
+        }
+        if (jenis_simpanan_id && jenis_simpanan_id !== 'ALL') {
+            query += ` AND t.jenis_simpanan_id = ?`;
+            params.push(jenis_simpanan_id);
+        }
         if (search) {
             query += ` AND a.nama LIKE ?`;
             params.push(`%${search}%`);
@@ -490,14 +499,24 @@ app.get('/api/history-pembayaran-all', async (req, res) => {
         query += ` ORDER BY po.created_at DESC;`;
 
         const [rows] = await connection.query(query, params);
-        if (rows.length === 0) {
-            console.log(`❌ Tidak ada riwayat transaksi ditemukan.`);
-            return res.status(404).json({ error: "Tidak ada riwayat transaksi ditemukan." });
-        }
         res.json({ history: rows });
     } catch (err) {
         console.log(`❌ Error saat mengambil riwayat pembayaran: ${err.message}`);
         res.status(500).json({ error: "Terjadi kesalahan server saat mengambil riwayat pembayaran." });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+// Endpoint baru untuk mendapatkan daftar jenis simpanan
+app.get('/api/jenis-simpanan', async (req, res) => {
+    const connection = await pool.getConnection();
+    try {
+        const [rows] = await connection.query(`SELECT id, nama_simpanan FROM jenis_simpanan`);
+        res.json({ jenis_simpanan: rows });
+    } catch (err) {
+        console.error('Error fetching jenis simpanan:', err);
+        res.status(500).json({ error: 'Failed to fetch jenis simpanan.' });
     } finally {
         if (connection) connection.release();
     }
