@@ -21,10 +21,10 @@ const config = {
 
     // Konfigurasi Database
     db: {
-        host: 'linku.co.id',
-        user: 'linkucoi_koplinku',
-        password: '~5m1,Nzg-3vn',
-        database: 'linkucoi_koplinku',
+        host: 'iksk8ss08ocgow0goksoos40',
+        user: 'root',
+        password: 'mChz0twCg9Pn5SMLDuVFZXwu9Qw9BaFDEft86hubOcuPhZD3cH5wPfKqelFK8tn1',
+        database: 'koperasi_linku',
         waitForConnections: true,
         connectionLimit: 10,
         queueLimit: 0
@@ -33,6 +33,31 @@ const config = {
 
 // --- DATABASE CONNECTION POOL ---
 const pool = mysql.createPool(config.db);
+
+// Log koneksi database saat startup
+pool.getConnection()
+    .then(connection => {
+        logToFile(`✅ Koneksi database berhasil — host: ${config.db.host}, database: ${config.db.database}`);
+        console.log(`✅ Database terhubung: ${config.db.database}@${config.db.host}`);
+        connection.release();
+    })
+    .catch(err => {
+        logToFile(`❌ Koneksi database GAGAL — ${err.message}`);
+        console.error(`❌ Gagal terhubung ke database:`, err.message);
+    });
+
+// Wrapper pool.getConnection dengan log otomatis
+const originalGetConnection = pool.getConnection.bind(pool);
+pool.getConnection = async function () {
+    try {
+        const connection = await originalGetConnection();
+        logToFile(`🔗 Koneksi diambil dari pool (threadId: ${connection.connection.threadId})`);
+        return connection;
+    } catch (err) {
+        logToFile(`❌ Gagal mengambil koneksi dari pool: ${err.message}`);
+        throw err;
+    }
+};
 
 // Middleware
 app.use(express.json());
